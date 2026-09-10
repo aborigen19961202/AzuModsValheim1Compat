@@ -14,22 +14,6 @@ namespace AzuModsValheim1Compat
         private static readonly ManualLogSource Log = Logger.CreateLogSource("AzuModsValheim1Compat");
         private static bool _pluginsPatched = false;
 
-        private static readonly HashSet<string> TargetPluginNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "AzuCraftyBoxes.dll",
-            "AzuAutoStore.dll",
-            "AzuExtendedPlayerInventory.dll",
-            "AzuAntiArthriticCrafting.dll",
-            "AzuClock.dll",
-            "FactionAssigner.dll",
-            "MistBeGone.dll",
-            "PetPantry.dll",
-            "Recycle_N_Reclaim.dll",
-            "CurrencyPocket.dll",
-            "SaveCrossbowState.dll",
-            "TrueInstantLootDrop.dll"
-        };
-
         // Tell BepInEx Preloader to pass assembly_valheim.dll to Patch()
         public static IEnumerable<string> TargetDLLs
         {
@@ -67,32 +51,39 @@ namespace AzuModsValheim1Compat
         {
             var mainModule = assembly.MainModule;
 
-            // 1. VisEquipment.AttachArmor(int itemHash, int variant) -> calls AttachArmor(itemHash, variant, 0)
-            var visEquip = mainModule.GetType("VisEquipment");
-            if (visEquip != null)
+            // 0. ZRoutedRpc.Everybody: convert const/literal to public static long
+            // This fixes ServerSync and all Azumatt mods entirely in memory, without touching plugin DLLs on disk!
+            var zrpc = mainModule.GetType("ZRoutedRpc");
+            var everybodyField = zrpc?.Fields.FirstOrDefault(f => f.Name == "Everybody");
+            if (everybodyField != null && everybodyField.IsLiteral)
             {
-                var target = visEquip.Methods.FirstOrDefault(m => m.Name == "AttachArmor" && m.Parameters.Count == 3);
-                var existing = visEquip.Methods.FirstOrDefault(m => m.Name == "AttachArmor" && m.Parameters.Count == 2);
-                if (target != null && existing == null)
+                everybodyField.Attributes &= ~FieldAttributes.Literal;
+                everybodyField.Attributes &= ~FieldAttributes.HasDefault;
+                everybodyField.Attributes |= FieldAttributes.Static | FieldAttributes.Public;
+                everybodyField.Constant = null;
+
+                var cctor = zrpc.Methods.FirstOrDefault(m => m.IsConstructor && m.IsStatic);
+                if (cctor == null)
                 {
-                    var bridge = new MethodDefinition("AttachArmor", MethodAttributes.Public | MethodAttributes.HideBySig, target.ReturnType);
-                    bridge.Parameters.Add(new ParameterDefinition("itemHash", ParameterAttributes.None, target.Parameters[0].ParameterType));
-                    bridge.Parameters.Add(new ParameterDefinition("variant", ParameterAttributes.None, target.Parameters[1].ParameterType));
-
-                    var il = bridge.Body.GetILProcessor();
-                    il.Emit(OpCodes.Ldarg_0); // this
-                    il.Emit(OpCodes.Ldarg_1); // itemHash
-                    il.Emit(OpCodes.Ldarg_2); // variant
-                    il.Emit(OpCodes.Ldc_I4_0); // quality = 0
-                    il.Emit(OpCodes.Callvirt, target);
+                    cctor = new MethodDefinition(".cctor", MethodAttributes.Private | MethodAttributes.Static | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, mainModule.TypeSystem.Void);
+                    var il = cctor.Body.GetILProcessor();
+                    il.Emit(OpCodes.Ldc_I8, 0L);
+                    il.Emit(OpCodes.Stsfld, everybodyField);
                     il.Emit(OpCodes.Ret);
-
-                    visEquip.Methods.Add(bridge);
-                    Log.LogInfo(" - Injected VisEquipment.AttachArmor(int, int) [Fixes MagicPlugin / ExtraSlots error]");
+                    zrpc.Methods.Add(cctor);
                 }
+                else
+                {
+                    var il = cctor.Body.GetILProcessor();
+                    var first = cctor.Body.Instructions[0];
+                    il.InsertBefore(first, il.Create(OpCodes.Ldc_I8, 0L));
+                    il.InsertBefore(first, il.Create(OpCodes.Stsfld, everybodyField));
+                }
+
+                Log.LogInfo(" - Converted ZRoutedRpc.Everybody from const to runtime static field [Fixes ServerSync / Azumatt mods in memory]");
             }
 
-            // 2. Character.Message(MessageType type, string msg, int amount, Sprite icon) -> calls Message(type, msg, amount, icon, false)
+            // 1. Character.Message(MessageType type, string msg, int amount, Sprite icon) -> calls Message(type, msg, amount, icon, false)
             var character = mainModule.GetType("Character");
             if (character != null)
             {
@@ -119,7 +110,7 @@ namespace AzuModsValheim1Compat
                 }
             }
 
-            // 3. SEMan.AddStatusEffect(StatusEffect, bool, int, float) -> calls (StatusEffect, bool, int, float, (short)0)
+            // 2. SEMan.AddStatusEffect(StatusEffect, bool, int, float) -> calls (StatusEffect, bool, int, float, (short)0)
             var seMan = mainModule.GetType("SEMan");
             if (seMan != null)
             {
@@ -171,7 +162,7 @@ namespace AzuModsValheim1Compat
                 }
             }
 
-            // 4. Inventory.IsTeleportable() -> calls IsTeleportable(false)
+            // 3. Inventory.IsTeleportable() -> calls IsTeleportable(false)
             var inventory = mainModule.GetType("Inventory");
             if (inventory != null)
             {
@@ -190,7 +181,7 @@ namespace AzuModsValheim1Compat
                     Log.LogInfo(" - Injected Inventory.IsTeleportable()");
                 }
 
-                // 4b. Inventory.AddItem(ItemData, int, int, int) -> calls AddItem(item, amount, x, y, false)
+                // 3b. Inventory.AddItem(ItemData, int, int, int) -> calls AddItem(item, amount, x, y, false)
                 var targetAdd4 = inventory.Methods.FirstOrDefault(m => m.Name == "AddItem" && m.Parameters.Count == 5 && m.Parameters[0].ParameterType.Name == "ItemData");
                 var existingAdd3 = inventory.Methods.FirstOrDefault(m => m.Name == "AddItem" && m.Parameters.Count == 4 && m.Parameters[0].ParameterType.Name == "ItemData");
                 if (targetAdd4 != null && existingAdd3 == null)
@@ -214,7 +205,7 @@ namespace AzuModsValheim1Compat
                 }
             }
 
-            // 5. EffectList.Create(Vector3, Quaternion, Transform, float, int) -> calls Create(..., ZDOID.None)
+            // 4. EffectList.Create(Vector3, Quaternion, Transform, float, int) -> calls Create(..., ZDOID.None)
             var effectList = mainModule.GetType("EffectList");
             if (effectList != null)
             {
@@ -244,7 +235,7 @@ namespace AzuModsValheim1Compat
                 }
             }
 
-            // 6. Terminal.ConsoleCommand..ctor (12 params) -> calls 13-param constructor with hideBehindDevCommands = false
+            // 5. Terminal.ConsoleCommand..ctor (12 params) -> calls 13-param constructor with hideBehindDevCommands = false
             var terminal = mainModule.GetType("Terminal");
             var consoleCmd = terminal?.NestedTypes.FirstOrDefault(t => t.Name == "ConsoleCommand");
             if (consoleCmd != null)
@@ -271,6 +262,67 @@ namespace AzuModsValheim1Compat
 
                     consoleCmd.Methods.Add(bridge);
                     Log.LogInfo(" - Injected Terminal.ConsoleCommand..ctor (12 params)");
+                }
+            }
+
+            // 6. ItemDrop.ItemData.GetTooltip (5 params) -> calls 6-param overload with appending = false
+            // Fixes Blacksmithing & Cooking mods which patch GetTooltip(ItemData, int, bool, float, int)
+            var itemDataType = mainModule.GetType("ItemDrop/ItemData");
+            if (itemDataType != null)
+            {
+                var target6 = itemDataType.Methods.FirstOrDefault(m => m.Name == "GetTooltip" && m.Parameters.Count == 6 && m.IsStatic);
+                var existing5 = itemDataType.Methods.FirstOrDefault(m => m.Name == "GetTooltip" && m.Parameters.Count == 5 && m.IsStatic);
+                if (target6 != null && existing5 == null)
+                {
+                    var bridge = new MethodDefinition("GetTooltip", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, target6.ReturnType);
+                    for (int i = 0; i < 5; i++)
+                        bridge.Parameters.Add(new ParameterDefinition(target6.Parameters[i].Name, ParameterAttributes.None, target6.Parameters[i].ParameterType));
+
+                    var il = bridge.Body.GetILProcessor();
+                    for (int i = 0; i < 5; i++)
+                        il.Emit(OpCodes.Ldarg, bridge.Parameters[i]);
+                    il.Emit(OpCodes.Ldc_I4_0); // appending = false
+                    il.Emit(OpCodes.Call, target6);
+                    il.Emit(OpCodes.Ret);
+
+                    itemDataType.Methods.Add(bridge);
+                    Log.LogInfo(" - Injected ItemDrop.ItemData.GetTooltip(5 params) [Fixes Blacksmithing & Cooking]");
+                }
+            }
+
+            // 7. InventoryGrid.Element: create nested subclass inheriting from InventoryElement
+            // In Valheim 1.0.7, InventoryGrid.Element was refactored to top-level InventoryElement.
+            // This bridge restores the nested type so mods referencing InventoryGrid/Element don't fail reflection.
+            var inventoryGrid = mainModule.GetType("InventoryGrid");
+            var inventoryElement = mainModule.GetType("InventoryElement");
+            if (inventoryGrid != null && inventoryElement != null)
+            {
+                var existingElement = inventoryGrid.NestedTypes.FirstOrDefault(t => t.Name == "Element");
+                if (existingElement == null)
+                {
+                    var nestedElement = new TypeDefinition("", "Element",
+                        TypeAttributes.NestedPublic | TypeAttributes.Class | TypeAttributes.BeforeFieldInit,
+                        inventoryElement);
+
+                    var vector2iType = mainModule.GetType("Vector2i");
+                    if (vector2iType != null)
+                    {
+                        nestedElement.Fields.Add(new FieldDefinition("m_pos", FieldAttributes.Public, vector2iType));
+                    }
+
+                    var baseCtor = inventoryElement.Methods.FirstOrDefault(m => m.IsConstructor && !m.IsStatic && m.Parameters.Count == 0);
+                    if (baseCtor != null)
+                    {
+                        var ctor = new MethodDefinition(".ctor", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, mainModule.TypeSystem.Void);
+                        var il = ctor.Body.GetILProcessor();
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Call, baseCtor);
+                        il.Emit(OpCodes.Ret);
+                        nestedElement.Methods.Add(ctor);
+                    }
+
+                    inventoryGrid.NestedTypes.Add(nestedElement);
+                    Log.LogInfo(" - Injected InventoryGrid.Element subclassing InventoryElement");
                 }
             }
         }
@@ -302,47 +354,55 @@ namespace AzuModsValheim1Compat
                     return;
                 }
 
-                Log.LogInfo("Scanning plugins directory for Azumatt / ServerSync mods requiring Valheim 1.0.7 compatibility...");
-
                 string[] allPluginDlls = Directory.GetFiles(pluginsPath, "*.dll", SearchOption.AllDirectories);
-                int patchedAssembliesCount = 0;
-                int totalReplacementsCount = 0;
 
+                // 1. Clean up / restore previously rewritten Azumatt DLLs if backups exist.
+                // Since ZRoutedRpc.Everybody is now solved completely in memory in assembly_valheim.dll,
+                // we restore original files so there is zero risk of metadata corruption.
                 foreach (string dllPath in allPluginDlls)
                 {
-                    string fileName = Path.GetFileName(dllPath);
-
-                    if (fileName.EndsWith(".bak", StringComparison.OrdinalIgnoreCase) ||
-                        fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
-                        fileName.Equals("AzuModsValheim1Compat.dll", StringComparison.OrdinalIgnoreCase))
+                    string backupPath = dllPath + ".orig.bak";
+                    if (File.Exists(backupPath))
                     {
-                        continue;
-                    }
-
-                    bool isTarget = TargetPluginNames.Contains(fileName) ||
-                                    fileName.StartsWith("Azu", StringComparison.OrdinalIgnoreCase);
-
-                    if (!isTarget)
-                        continue;
-
-                    try
-                    {
-                        int replacements = PatchPluginFile(dllPath);
-                        if (replacements > 0)
+                        string fileName = Path.GetFileName(dllPath);
+                        if (fileName.StartsWith("Azu", StringComparison.OrdinalIgnoreCase) ||
+                            fileName.Equals("MistBeGone.dll", StringComparison.OrdinalIgnoreCase))
                         {
-                            patchedAssembliesCount++;
-                            totalReplacementsCount += replacements;
+                            try
+                            {
+                                File.Copy(backupPath, dllPath, true);
+                                Log.LogInfo($"Restored original {fileName} from backup (memory patch handles ZRoutedRpc.Everybody).");
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.LogWarning($"Could not restore backup for {fileName}: {ex.Message}");
+                            }
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.LogError($"Error patching {fileName}: {ex.Message}\n{ex.StackTrace}");
                     }
                 }
 
-                if (patchedAssembliesCount > 0)
+                // 2. Scan for plugins that call the old 2-argument VisEquipment.AttachArmor (e.g. MagicPlugin).
+                // We patch their call sites to pass quality = 0 to the 3-arg method,
+                // preventing AmbiguousMatchException for mods like EpicLoot.
+                foreach (string dllPath in allPluginDlls)
                 {
-                    Log.LogInfo($"Plugin compatibility patch applied: {patchedAssembliesCount} assembly(ies) updated ({totalReplacementsCount} ZRoutedRpc.Everybody instructions fixed).");
+                    string fileName = Path.GetFileName(dllPath);
+                    if (fileName.EndsWith(".bak", StringComparison.OrdinalIgnoreCase) ||
+                        fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+                        fileName.Equals("AzuModsValheim1Compat.dll", StringComparison.OrdinalIgnoreCase) ||
+                        fileName.Equals("Backpacks.dll", StringComparison.OrdinalIgnoreCase)) // Backpacks is handled by ADARC patcher
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        PatchAttachArmorCalls(dllPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.LogError($"Error checking AttachArmor calls in {fileName}: {ex.Message}");
+                    }
                 }
             }
             catch (Exception ex)
@@ -351,62 +411,79 @@ namespace AzuModsValheim1Compat
             }
         }
 
-        private static int PatchPluginFile(string dllPath)
+        private static void PatchAttachArmorCalls(string dllPath)
         {
             string fileName = Path.GetFileName(dllPath);
 
+            // Fast check: scan file bytes for "AttachArmor"
             byte[] dllBytes = File.ReadAllBytes(dllPath);
+            string asText = System.Text.Encoding.ASCII.GetString(dllBytes);
+            if (!asText.Contains("AttachArmor"))
+                return;
+
             using (var stream = new MemoryStream(dllBytes))
             using (var assembly = AssemblyDefinition.ReadAssembly(stream))
             {
-                int replacedInstructions = 0;
+                int patchedCalls = 0;
 
-                foreach (var type in assembly.MainModule.GetTypes())
+                foreach (var type in assembly.MainModule.Types)
                 {
                     foreach (var method in type.Methods)
                     {
                         if (!method.HasBody || method.Body.Instructions == null)
                             continue;
 
-                        foreach (var instruction in method.Body.Instructions)
+                        var il = method.Body.GetILProcessor();
+                        var instructions = method.Body.Instructions.ToArray();
+
+                        foreach (var inst in instructions)
                         {
-                            if (instruction.OpCode == OpCodes.Ldsfld &&
-                                instruction.Operand is FieldReference fieldRef &&
-                                fieldRef.DeclaringType != null &&
-                                fieldRef.DeclaringType.Name == "ZRoutedRpc" &&
-                                fieldRef.Name == "Everybody")
+                            if (inst.OpCode == OpCodes.Callvirt &&
+                                inst.Operand is MethodReference methodRef &&
+                                methodRef.DeclaringType != null &&
+                                methodRef.DeclaringType.Name == "VisEquipment" &&
+                                methodRef.Name == "AttachArmor" &&
+                                methodRef.Parameters.Count == 2)
                             {
-                                instruction.OpCode = OpCodes.Ldc_I8;
-                                instruction.Operand = 0L;
-                                replacedInstructions++;
+                                // Construct new 3-parameter reference: AttachArmor(int, int, int)
+                                var newRef = new MethodReference("AttachArmor", methodRef.ReturnType, methodRef.DeclaringType)
+                                {
+                                    HasThis = methodRef.HasThis,
+                                    ExplicitThis = methodRef.ExplicitThis,
+                                    CallingConvention = methodRef.CallingConvention
+                                };
+                                foreach (var p in methodRef.Parameters)
+                                    newRef.Parameters.Add(new ParameterDefinition(p.Name, p.Attributes, p.ParameterType));
+                                newRef.Parameters.Add(new ParameterDefinition("quality", ParameterAttributes.None, assembly.MainModule.TypeSystem.Int32));
+
+                                il.InsertBefore(inst, il.Create(OpCodes.Ldc_I4_0));
+                                inst.Operand = newRef;
+                                patchedCalls++;
                             }
                         }
                     }
                 }
 
-                if (replacedInstructions == 0)
+                if (patchedCalls > 0)
                 {
-                    return 0;
-                }
+                    string backupPath = dllPath + ".orig.bak";
+                    if (!File.Exists(backupPath))
+                    {
+                        File.Copy(dllPath, backupPath, false);
+                    }
 
-                string backupPath = dllPath + ".orig.bak";
-                if (!File.Exists(backupPath))
-                {
-                    File.Copy(dllPath, backupPath, false);
-                }
+                    string tempPath = dllPath + ".tmp";
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
 
-                string tempPath = dllPath + ".tmp";
-                if (File.Exists(tempPath))
-                {
+                    assembly.Write(tempPath);
+                    File.Copy(tempPath, dllPath, true);
                     File.Delete(tempPath);
+
+                    Log.LogInfo($"[Compatibility Fix] Patched {fileName}: updated {patchedCalls} VisEquipment.AttachArmor call(s) to 3-parameter version with quality=0.");
                 }
-
-                assembly.Write(tempPath);
-                File.Copy(tempPath, dllPath, true);
-                File.Delete(tempPath);
-
-                Log.LogInfo($"[Compatibility Fix] Patched {fileName}: replaced {replacedInstructions} ZRoutedRpc.Everybody instruction(s). Backup: {Path.GetFileName(backupPath)}");
-                return replacedInstructions;
             }
         }
     }

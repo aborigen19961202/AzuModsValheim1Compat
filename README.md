@@ -17,11 +17,18 @@ With the release of **Valheim 1.0.7** (Unity 6 engine update):
 ## What This Patch Does
 
 This patch runs in the **BepInEx Preloader** phase before the game engine starts plugins:
-1. Scans installed mods in your `BepInEx/plugins` folder.
-2. Detects Azumatt mods (`AzuCraftyBoxes`, `AzuAutoStore`, `AzuExtendedPlayerInventory`, `AzuAntiArthriticCrafting`, `AzuClock`, `PetPantry`, `Recycle_N_Reclaim`, etc.).
-3. Safely replaces the broken `ldsfld` instruction with `ldc.i8 0L` directly.
-4. Preserves an automatic backup (`<ModName>.dll.orig.bak`).
-5. Allows your mods to load cleanly without crashing!
+1. **In-Memory `ZRoutedRpc.Everybody` Restoration**: Converts `ZRoutedRpc.Everybody` from a compile-time `const` back into an active runtime static field in memory. **No mod DLLs need to be modified on disk!** ServerSync and all Azumatt mods run cleanly without metadata corruption.
+2. **API Compatibility Bridges**: Injects backwards-compatibility bridge methods into `assembly_valheim.dll` for breaking changes introduced in Valheim 1.0.7:
+   - `ItemDrop.ItemData.GetTooltip`: Restores 5-parameter static overload (fixes **Blacksmithing** & **Cooking** crashes).
+   - `Character.Message`: Restores 4-parameter overload.
+   - `SEMan.AddStatusEffect`: Restores 4-parameter overloads (both StatusEffect and int hash).
+   - `Inventory.IsTeleportable`: Restores 0-parameter overload.
+   - `Inventory.AddItem`: Restores 4-parameter overload.
+   - `EffectList.Create`: Restores 5-parameter overload.
+   - `Terminal.ConsoleCommand`: Restores 12-parameter constructor.
+   - `InventoryGrid.Element`: Restores nested type definition referencing new `InventoryElement`.
+3. **VisEquipment.AttachArmor Call-Site Upgrading**: Automatically upgrades legacy 2-parameter `AttachArmor` calls in plugins (such as `MagicPlugin`) to the 1.0.7 3-parameter signature without colliding with `EpicLoot` Harmony patches.
+4. Allows your modpack to load smoothly and cleanly!
 
 ---
 
