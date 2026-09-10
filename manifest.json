@@ -1,0 +1,9 @@
+{
+  "name": "AzuModsValheim1Compat",
+  "version_number": "1.0.0",
+  "website_url": "",
+  "description": "Preloader compatibility patch for Valheim 1.0.7 / Unity 6. Fixes ZRoutedRpc.Everybody MissingFieldException in AzuCraftyBoxes, AzuAutoStore, and other Azumatt mods.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2350"
+  ]
+}

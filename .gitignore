@@ -1,0 +1,20 @@
+# Build outputs
+bin/
+obj/
+
+# Package outputs
+package/
+package/*.zip
+*.zip
+
+# User / OS files
+.DS_Store
+Thumbs.db
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Backups and temp files
+*.bak
+*.tmp
