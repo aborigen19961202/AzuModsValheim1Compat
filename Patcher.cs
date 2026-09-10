@@ -459,6 +459,107 @@ namespace AzuModsValheim1Compat
                     Log.LogInfo(" - Injected PlayerProfile.m_itemCraftStats with auto-initialization [Fixes Blacksmithing character load/save crash]");
                 }
             }
+
+            // 10. ZoneSystem.GetZone(Vector3 point) returning Vector2i
+            // In Valheim 1.0.7, ZoneSystem.GetZone was changed to return Vector2s instead of Vector2i.
+            // Fixes MissingMethodException when mods (like QuickTeleport / sector mods) call GetZone(Vector3)
+            var zoneSystem = mainModule.GetType("ZoneSystem");
+            if (zoneSystem != null)
+            {
+                var targetGetZone = zoneSystem.Methods.FirstOrDefault(m => m.Name == "GetZone" && m.IsStatic && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "Vector3" && m.ReturnType.Name == "Vector2s");
+                var existingGetZone = zoneSystem.Methods.FirstOrDefault(m => m.Name == "GetZone" && m.IsStatic && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "Vector3" && m.ReturnType.Name == "Vector2i");
+                if (targetGetZone != null && existingGetZone == null)
+                {
+                    var v2sTypeDef = targetGetZone.ReturnType.Resolve();
+                    var v2sX = mainModule.ImportReference(v2sTypeDef?.Fields.FirstOrDefault(f => f.Name == "x"));
+                    var v2sY = mainModule.ImportReference(v2sTypeDef?.Fields.FirstOrDefault(f => f.Name == "y"));
+
+                    TypeReference v2iTypeRef = null;
+                    MethodReference v2iCtorRef = null;
+                    FieldReference v2iX = null;
+                    FieldReference v2iY = null;
+                    MethodReference v2sCtor = null;
+
+                    foreach (var ar in mainModule.AssemblyReferences)
+                    {
+                        if (ar.Name == "assembly_utils")
+                        {
+                            try
+                            {
+                                var utilsDef = mainModule.AssemblyResolver.Resolve(ar);
+                                var v2iDef = utilsDef?.MainModule.GetType("Vector2i");
+                                if (v2iDef != null)
+                                {
+                                    v2iTypeRef = mainModule.ImportReference(v2iDef);
+                                    var ctorDef = v2iDef.Methods.FirstOrDefault(m => m.IsConstructor && m.Parameters.Count == 2 && m.Parameters[0].ParameterType.Name == "Int32");
+                                    if (ctorDef != null)
+                                        v2iCtorRef = mainModule.ImportReference(ctorDef);
+                                    var xF = v2iDef.Fields.FirstOrDefault(f => f.Name == "x");
+                                    var yF = v2iDef.Fields.FirstOrDefault(f => f.Name == "y");
+                                    if (xF != null) v2iX = mainModule.ImportReference(xF);
+                                    if (yF != null) v2iY = mainModule.ImportReference(yF);
+                                }
+                                var v2sDef = utilsDef?.MainModule.GetType("Vector2s");
+                                if (v2sDef != null)
+                                {
+                                    var sCtor = v2sDef.Methods.FirstOrDefault(m => m.IsConstructor && m.Parameters.Count == 2 && m.Parameters[0].ParameterType.Name == "Int32");
+                                    if (sCtor != null)
+                                        v2sCtor = mainModule.ImportReference(sCtor);
+                                }
+                            }
+                            catch { }
+                            break;
+                        }
+                    }
+
+                    if (v2iTypeRef != null && v2iCtorRef != null && v2sX != null && v2sY != null)
+                    {
+                        var bridge = new MethodDefinition("GetZone", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, v2iTypeRef);
+                        bridge.Parameters.Add(new ParameterDefinition("point", ParameterAttributes.None, targetGetZone.Parameters[0].ParameterType));
+
+                        var v2sVar = new VariableDefinition(targetGetZone.ReturnType);
+                        bridge.Body.Variables.Add(v2sVar);
+
+                        var il = bridge.Body.GetILProcessor();
+                        il.Emit(OpCodes.Ldarg_0);
+                        il.Emit(OpCodes.Call, targetGetZone);
+                        il.Emit(OpCodes.Stloc_0);
+                        il.Emit(OpCodes.Ldloca_S, v2sVar);
+                        il.Emit(OpCodes.Ldfld, v2sX);
+                        il.Emit(OpCodes.Conv_I4);
+                        il.Emit(OpCodes.Ldloca_S, v2sVar);
+                        il.Emit(OpCodes.Ldfld, v2sY);
+                        il.Emit(OpCodes.Conv_I4);
+                        il.Emit(OpCodes.Newobj, v2iCtorRef);
+                        il.Emit(OpCodes.Ret);
+
+                        zoneSystem.Methods.Add(bridge);
+                        Log.LogInfo(" - Injected ZoneSystem.GetZone(Vector3) returning Vector2i [Fixes QuickTeleport / sector mods]");
+                    }
+
+                    // Also bridge IsZoneLoaded(Vector2i) -> IsZoneLoaded(Vector2s)
+                    var targetIsZoneLoaded = zoneSystem.Methods.FirstOrDefault(m => m.Name == "IsZoneLoaded" && !m.IsStatic && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "Vector2s" && m.ReturnType.Name == "Boolean");
+                    var existingIsZoneLoaded = zoneSystem.Methods.FirstOrDefault(m => m.Name == "IsZoneLoaded" && !m.IsStatic && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "Vector2i" && m.ReturnType.Name == "Boolean");
+                    if (targetIsZoneLoaded != null && existingIsZoneLoaded == null && v2iTypeRef != null && v2sCtor != null && v2iX != null && v2iY != null)
+                    {
+                        var bridgeLoaded = new MethodDefinition("IsZoneLoaded", MethodAttributes.Public | MethodAttributes.HideBySig, mainModule.TypeSystem.Boolean);
+                        bridgeLoaded.Parameters.Add(new ParameterDefinition("zoneID", ParameterAttributes.None, v2iTypeRef));
+
+                        var il = bridgeLoaded.Body.GetILProcessor();
+                        il.Emit(OpCodes.Ldarg_0); // this
+                        il.Emit(OpCodes.Ldarga_S, bridgeLoaded.Parameters[0]);
+                        il.Emit(OpCodes.Ldfld, v2iX);
+                        il.Emit(OpCodes.Ldarga_S, bridgeLoaded.Parameters[0]);
+                        il.Emit(OpCodes.Ldfld, v2iY);
+                        il.Emit(OpCodes.Newobj, v2sCtor);
+                        il.Emit(OpCodes.Callvirt, targetIsZoneLoaded);
+                        il.Emit(OpCodes.Ret);
+
+                        zoneSystem.Methods.Add(bridgeLoaded);
+                        Log.LogInfo(" - Injected ZoneSystem.IsZoneLoaded(Vector2i) [Fixes QuickTeleport / sector mods]");
+                    }
+                }
+            }
         }
 
 
@@ -500,8 +601,7 @@ namespace AzuModsValheim1Compat
                     if (File.Exists(backupPath))
                     {
                         string fileName = Path.GetFileName(dllPath);
-                        if (fileName.Equals("MistBeGone.dll", StringComparison.OrdinalIgnoreCase) ||
-                            fileName.Equals("AzuAutoStore.dll", StringComparison.OrdinalIgnoreCase))
+                        if (fileName.Equals("MistBeGone.dll", StringComparison.OrdinalIgnoreCase))
                         {
                             try
                             {
@@ -521,7 +621,8 @@ namespace AzuModsValheim1Compat
                 // - VisEquipment.AttachArmor 2->3 param upgrading (MagicPlugin)
                 // - Blacksmithing transpiler scan bypass (Blacksmithing)
                 // - EpicLoot-UnityLib HarmonyPatch redirection (AzuCraftyBoxes)
-                // - RemoveLogging transpiler neutralization on Inventory.AddItem (AzuAutoStore)
+                // - Legacy InventoryGrid/Element hooks & RemoveLogging neutralization (AzuAutoStore)
+                // - IsAreaReadyPatch neutralization for Valheim 1.0 (QuickTeleport)
                 foreach (string dllPath in allPluginDlls)
                 {
                     string fileName = Path.GetFileName(dllPath);
@@ -538,6 +639,8 @@ namespace AzuModsValheim1Compat
                         PatchAttachArmorCalls(dllPath);
                         PatchBlacksmithing(dllPath);
                         PatchAzuCraftyBoxes(dllPath);
+                        PatchAzuAutoStore(dllPath);
+                        PatchQuickTeleport(dllPath);
                     }
                     catch (Exception ex)
                     {
@@ -761,6 +864,149 @@ namespace AzuModsValheim1Compat
             }
         }
 
+        private static void PatchAzuAutoStore(string dllPath)
+        {
+            string fileName = Path.GetFileName(dllPath);
+            if (!fileName.Equals("AzuAutoStore.dll", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            try
+            {
+                byte[] dllBytes = File.ReadAllBytes(dllPath);
+                using (var stream = new MemoryStream(dllBytes))
+                using (var assembly = AssemblyDefinition.ReadAssembly(stream, GetReaderParameters()))
+                {
+                    int patched = 0;
+
+                    // 1. Neutralize InventoryGridGetHoveredElementPatch.Prefix
+                    // In Valheim 1.0.7, InventoryGrid.GetHoveredElement() returns top-level InventoryElement instead of nested InventoryGrid/Element.
+                    // This legacy Prefix fails JIT resolution with MissingMethodException: Method not found: InventoryGrid/Element .InventoryGrid.GetHoveredElement()
+                    var hoverType = assembly.MainModule.GetType("AzuAutoStore.Patches.InventoryGridGetHoveredElementPatch");
+                    var prefix = hoverType?.Methods.FirstOrDefault(m => m.Name == "Prefix");
+                    if (prefix != null && prefix.HasBody && prefix.Body.Instructions.Count > 1)
+                    {
+                        prefix.Body.ExceptionHandlers.Clear();
+                        prefix.Body.Variables.Clear();
+                        prefix.Body.Instructions.Clear();
+                        prefix.Body.Instructions.Add(Instruction.Create(OpCodes.Ret));
+                        patched++;
+                    }
+
+                    // 2. Neutralize BorderRenderer.UpdateGui
+                    // Uses List<InventoryGrid/Element> InventoryGrid::m_elements, which does not exist in 1.0.7 (replaced by List<InventoryElement>)
+                    var borderType = assembly.MainModule.GetType("AzuAutoStore.Patches.Favoriting.BorderRenderer");
+                    var updateGui = borderType?.Methods.FirstOrDefault(m => m.Name == "UpdateGui");
+                    if (updateGui != null && updateGui.HasBody && updateGui.Body.Instructions.Count > 1)
+                    {
+                        updateGui.Body.ExceptionHandlers.Clear();
+                        updateGui.Body.Variables.Clear();
+                        updateGui.Body.Instructions.Clear();
+                        updateGui.Body.Instructions.Add(Instruction.Create(OpCodes.Ret));
+                        patched++;
+                    }
+
+                    // 3. Neutralize InventoryGridUpdateInventoryPatch
+                    // Uses List<InventoryGrid/Element> InventoryGrid::m_elements from legacy MUC
+                    var guiPatch = assembly.MainModule.GetType("AzuAutoStore.APIs.MUC.MUCSrc.Patches.InventoryGuiPatch");
+                    var updateInv = guiPatch?.Methods.FirstOrDefault(m => m.Name == "InventoryGridUpdateInventoryPatch");
+                    if (updateInv != null && updateInv.HasBody && updateInv.Body.Instructions.Count > 1)
+                    {
+                        updateInv.Body.ExceptionHandlers.Clear();
+                        updateInv.Body.Variables.Clear();
+                        updateInv.Body.Instructions.Clear();
+                        updateInv.Body.Instructions.Add(Instruction.Create(OpCodes.Ret));
+                        patched++;
+                    }
+
+                    // 4. Neutralize RemoveLogging on Inventory.AddItem
+                    // Bypasses MUC transpiler that caused ArgumentOutOfRangeException
+                    var invPatch = assembly.MainModule.GetType("AzuAutoStore.APIs.MUC.MUCSrc.Patches.InventoryPatch");
+                    var removeLogging = invPatch?.Methods.FirstOrDefault(m => m.Name == "RemoveLogging");
+                    if (removeLogging != null && removeLogging.HasBody && removeLogging.Body.Instructions.Count > 2)
+                    {
+                        removeLogging.Body.ExceptionHandlers.Clear();
+                        removeLogging.Body.Variables.Clear();
+                        removeLogging.Body.Instructions.Clear();
+                        removeLogging.Body.Instructions.Add(Instruction.Create(OpCodes.Ldarg_0));
+                        removeLogging.Body.Instructions.Add(Instruction.Create(OpCodes.Ret));
+                        patched++;
+                    }
+
+                    if (patched > 0)
+                    {
+                        string backupPath = dllPath + ".orig.bak";
+                        if (!File.Exists(backupPath))
+                        {
+                            File.Copy(dllPath, backupPath, false);
+                        }
+
+                        string tempPath = dllPath + ".tmp";
+                        if (File.Exists(tempPath))
+                        {
+                            File.Delete(tempPath);
+                        }
+
+                        assembly.Write(tempPath);
+                        File.Copy(tempPath, dllPath, true);
+                        File.Delete(tempPath);
+
+                        Log.LogInfo($"[Compatibility Fix] Patched {fileName}: neutralized {patched} legacy InventoryGrid/Element hook(s) & transpiler(s) [Fixes GetHoveredElement crash on inventory/crafting].");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogError($"Failed to patch AzuAutoStore.dll: {ex.Message}");
+            }
+        }
+
+        private static void PatchQuickTeleport(string dllPath)
+        {
+            string fileName = Path.GetFileName(dllPath);
+            if (!fileName.Equals("QuickTeleport.dll", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            try
+            {
+                byte[] dllBytes = File.ReadAllBytes(dllPath);
+                using (var stream = new MemoryStream(dllBytes))
+                using (var assembly = AssemblyDefinition.ReadAssembly(stream, GetReaderParameters()))
+                {
+                    var isAreaReadyType = assembly.MainModule.GetType("QuickTeleport.QuickTeleportPlugin/IsAreaReadyPatch");
+                    var prefix = isAreaReadyType?.Methods.FirstOrDefault(m => m.Name == "Prefix");
+                    if (prefix != null && prefix.HasBody && prefix.Body.Instructions.Count > 2)
+                    {
+                        prefix.Body.ExceptionHandlers.Clear();
+                        prefix.Body.Variables.Clear();
+                        prefix.Body.Instructions.Clear();
+                        prefix.Body.Instructions.Add(Instruction.Create(OpCodes.Ldc_I4_1));
+                        prefix.Body.Instructions.Add(Instruction.Create(OpCodes.Ret));
+
+                        string backupPath = dllPath + ".orig.bak";
+                        if (!File.Exists(backupPath))
+                        {
+                            File.Copy(dllPath, backupPath, false);
+                        }
+
+                        string tempPath = dllPath + ".tmp";
+                        if (File.Exists(tempPath))
+                        {
+                            File.Delete(tempPath);
+                        }
+
+                        assembly.Write(tempPath);
+                        File.Copy(tempPath, dllPath, true);
+                        File.Delete(tempPath);
+
+                        Log.LogInfo($"[Compatibility Fix] Patched {fileName}: neutralized broken IsAreaReadyPatch [Fixes infinite world loading].");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogError($"Failed to patch QuickTeleport.dll: {ex.Message}");
+            }
+        }
 
         private static ReaderParameters GetReaderParameters()
         {

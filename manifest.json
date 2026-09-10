@@ -1,6 +1,6 @@
 {
   "name": "AzuModsValheim1Compat",
-  "version_number": "1.0.7",
+  "version_number": "1.0.8",
   "website_url": "https://github.com/aborigen19961202/AzuModsValheim1Compat",
   "description": "Preloader compatibility patch for Valheim 1.0.7 (Unity 6). Expanded beyond original scope: fixes crashes for Azumatt (AzuCraftyBoxes, AutoStore), Smoothbrain (Blacksmithing, Cooking, ExtraSlots), MagicPlugin, character save/creation & more.",
   "dependencies": [

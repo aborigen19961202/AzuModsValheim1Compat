@@ -1,4 +1,4 @@
-﻿# Valheim 1.0.7 Compatibility Patcher (Azumatt, Smoothbrain & Legacy Mods)
+# Valheim 1.0.7 Compatibility Patcher (Azumatt, Smoothbrain & Legacy Mods)
 ### *AzuModsValheim1Compat вЂ” Expanded Universal Compatibility Patch*
 
 **AzuModsValheim1Compat** is a comprehensive BepInEx Preloader compatibility patch for **Valheim 1.0.7** (Unity 6 update).
@@ -37,6 +37,12 @@ Restores breaking method signatures changed by Iron Gate so older mods continue 
 - `EffectList.Create(Vector3, Quaternion, Transform, float, int)` (5-param overload)
 - `Terminal.ConsoleCommand..ctor` (12-param constructor)
 - `InventoryGrid.Element` (subclasses new `InventoryElement`)
+- `ZoneSystem.GetZone(Vector3)` (returns `Vector2i` bridging from 1.0.7's `Vector2s`)
+- `ZoneSystem.IsZoneLoaded(Vector2i)` (bridges to `IsZoneLoaded(Vector2s)`)
+
+### 5. AzuAutoStore & QuickTeleport (v1.0.8 Update)
+- **`InventoryGrid.GetHoveredElement` Crash Resolution**: Valheim 1.0.7 refactored `InventoryGrid.Element` into a standalone MonoBehaviour `InventoryElement`. Outdated UI hooks in `AzuAutoStore` (`InventoryGridGetHoveredElementPatch`, `BorderRenderer`, and `InventoryGridUpdateInventoryPatch`) caused constant `MissingMethodException` / `MissingFieldException` spam when opening inventory or crafting. These hooks are cleanly neutralized, allowing the core auto-storing & chest deposit logic to function flawlessly without UI errors.
+- **`QuickTeleport` & World Loading Fix**: In Valheim 1.0.7, zone coordinates changed from 32-bit `Vector2i` to 16-bit `Vector2s`. `QuickTeleport`'s `IsAreaReadyPatch` caused infinite loading screens when entering a world; the patch provides the `ZoneSystem.GetZone(Vector3) : Vector2i` bridge in memory and neutralizes the broken patch.
 
 ---
 
