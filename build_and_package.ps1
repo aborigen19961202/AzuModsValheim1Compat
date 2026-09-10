@@ -53,8 +53,10 @@ if (Test-Path (Split-Path -Parent $r2profile2)) {
     New-Item -ItemType Directory -Force -Path $r2profile2 | Out-Null
     Copy-Item (Join-Path $scriptDir "bin\Release\netstandard2.0\AzuModsValheim1Compat.dll") -Destination $r2profile2 -Force
     Write-Host "===> Successfully deployed to: $r2profile2" -ForegroundColor Green
-}
-if (Test-Path (Split-Path -Parent $r2profile1)) {
+    if (Test-Path $r2profile1) {
+        Remove-Item $r2profile1 -Recurse -Force
+    }
+} elseif (Test-Path (Split-Path -Parent $r2profile1)) {
     Write-Host "===> Deploying to r2modman profile 'sborka'..." -ForegroundColor Yellow
     New-Item -ItemType Directory -Force -Path $r2profile1 | Out-Null
     Copy-Item (Join-Path $scriptDir "bin\Release\netstandard2.0\AzuModsValheim1Compat.dll") -Destination $r2profile1 -Force
