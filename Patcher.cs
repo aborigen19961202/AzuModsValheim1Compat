@@ -19,6 +19,7 @@ namespace AzuModsValheim1Compat
         {
             get
             {
+                InstallAssemblyResolver();
                 ExecutePluginPatch();
                 return new[] { "assembly_valheim.dll" };
             }
@@ -26,6 +27,7 @@ namespace AzuModsValheim1Compat
 
         public static void Initialize()
         {
+            InstallAssemblyResolver();
             ExecutePluginPatch();
         }
 
@@ -228,6 +230,16 @@ namespace AzuModsValheim1Compat
                     inventory.Methods.Add(bridge);
                     Log.LogInfo(" - Injected Inventory.AddItem(8 params) [Fixes ItemDataManager / Cooking / EpicLoot / ExtraSlots]");
                 }
+
+                // 3d. Rename redundant Inventory.Load(ZPackage, bool) to Load_Unused
+                // In Valheim 1.0.7, Iron Gate added an unused 2-param overload Load(ZPackage, bool)
+                // which causes AmbiguousMatchException in Harmony patches like AzuAutoStore's InventorySelectSameItemAfterLoad
+                var redundantLoad = inventory.Methods.FirstOrDefault(m => m.Name == "Load" && m.Parameters.Count == 2 && m.Parameters[1].ParameterType.Name == "Boolean");
+                if (redundantLoad != null)
+                {
+                    redundantLoad.Name = "Load_Unused";
+                    Log.LogInfo(" - Renamed redundant Inventory.Load(ZPackage, bool) to Load_Unused [Fixes AzuAutoStore AmbiguousMatchException]");
+                }
             }
 
             // 4. EffectList.Create(Vector3, Quaternion, Transform, float, int) -> calls Create(..., ZDOID.None)
@@ -385,6 +397,39 @@ namespace AzuModsValheim1Compat
                     Log.LogInfo(" - Injected InventoryGrid.OnRightClick(UIInputHandler) [Fixes AzuAutoStore Favoriting]");
                 }
             }
+
+            // 9. PlayerProfile.m_itemCraftStats: inject Dictionary<string, float> field and initialize in constructor
+            // Fixes Smoothbrain's Blacksmithing crash on character select and character saving/loading
+            var playerProfile = mainModule.GetType("PlayerProfile");
+            if (playerProfile != null)
+            {
+                var existingField = playerProfile.Fields.FirstOrDefault(f => f.Name == "m_itemCraftStats");
+                if (existingField == null)
+                {
+                    var dictType = mainModule.ImportReference(typeof(Dictionary<string, float>));
+                    var dictCtor = mainModule.ImportReference(typeof(Dictionary<string, float>).GetConstructor(Type.EmptyTypes));
+
+                    var field = new FieldDefinition("m_itemCraftStats", FieldAttributes.Public, dictType);
+                    playerProfile.Fields.Add(field);
+
+                    var ctor = playerProfile.Methods.FirstOrDefault(m => m.IsConstructor && !m.IsStatic);
+                    if (ctor != null && ctor.HasBody)
+                    {
+                        var il = ctor.Body.GetILProcessor();
+                        var first = ctor.Body.Instructions[0];
+
+                        var i1 = il.Create(OpCodes.Ldarg_0);
+                        var i2 = il.Create(OpCodes.Newobj, dictCtor);
+                        var i3 = il.Create(OpCodes.Stfld, field);
+
+                        il.InsertBefore(first, i1);
+                        il.InsertAfter(i1, i2);
+                        il.InsertAfter(i2, i3);
+                    }
+
+                    Log.LogInfo(" - Injected PlayerProfile.m_itemCraftStats with auto-initialization [Fixes Blacksmithing character load/save crash]");
+                }
+            }
         }
 
 
@@ -426,12 +471,13 @@ namespace AzuModsValheim1Compat
                     if (File.Exists(backupPath))
                     {
                         string fileName = Path.GetFileName(dllPath);
-                        if (fileName.StartsWith("Azu", StringComparison.OrdinalIgnoreCase) ||
+                        if (fileName.Equals("AzuAutoStore.dll", StringComparison.OrdinalIgnoreCase) ||
                             fileName.Equals("MistBeGone.dll", StringComparison.OrdinalIgnoreCase))
                         {
                             try
                             {
                                 File.Copy(backupPath, dllPath, true);
+                                File.Delete(backupPath);
                                 Log.LogInfo($"Restored original {fileName} from backup (memory patch handles ZRoutedRpc.Everybody).");
                             }
                             catch (Exception ex)
@@ -442,9 +488,10 @@ namespace AzuModsValheim1Compat
                     }
                 }
 
-                // 2. Scan for plugins that call the old 2-argument VisEquipment.AttachArmor (e.g. MagicPlugin).
-                // We patch their call sites to pass quality = 0 to the 3-arg method,
-                // preventing AmbiguousMatchException for mods like EpicLoot.
+                // 2. Scan for plugins that require compatibility patching:
+                // - VisEquipment.AttachArmor 2->3 param upgrading (MagicPlugin)
+                // - Blacksmithing transpiler scan bypass (Blacksmithing)
+                // - EpicLoot-UnityLib HarmonyPatch redirection (AzuCraftyBoxes)
                 foreach (string dllPath in allPluginDlls)
                 {
                     string fileName = Path.GetFileName(dllPath);
@@ -460,12 +507,12 @@ namespace AzuModsValheim1Compat
                     {
                         PatchAttachArmorCalls(dllPath);
                         PatchBlacksmithing(dllPath);
+                        PatchAzuCraftyBoxes(dllPath);
                     }
                     catch (Exception ex)
                     {
                         Log.LogError($"Error checking plugin compatibility in {fileName}: {ex.Message}");
                     }
-
                 }
             }
             catch (Exception ex)
@@ -610,6 +657,110 @@ namespace AzuModsValheim1Compat
             catch (Exception ex)
             {
                 Log.LogError($"Failed to patch Blacksmithing.dll: {ex.Message}");
+            }
+        }
+
+        private static void PatchAzuCraftyBoxes(string dllPath)
+        {
+            string fileName = Path.GetFileName(dllPath);
+            if (!fileName.Equals("AzuCraftyBoxes.dll", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            try
+            {
+                byte[] dllBytes = File.ReadAllBytes(dllPath);
+                string asText = System.Text.Encoding.ASCII.GetString(dllBytes);
+                if (!asText.Contains("EpicLoot-UnityLib"))
+                    return;
+
+                using (var stream = new MemoryStream(dllBytes))
+                using (var assembly = AssemblyDefinition.ReadAssembly(stream))
+                {
+                    int patched = 0;
+                    foreach (var type in assembly.MainModule.Types)
+                    {
+                        foreach (var nested in type.NestedTypes)
+                        {
+                            foreach (var method in nested.Methods)
+                            {
+                                foreach (var ca in method.CustomAttributes)
+                                {
+                                    if (ca.AttributeType.Name == "HarmonyPatch")
+                                    {
+                                        for (int i = 0; i < ca.ConstructorArguments.Count; i++)
+                                        {
+                                            var arg = ca.ConstructorArguments[i];
+                                            if (arg.Value is string s && s.Contains("EpicLoot-UnityLib"))
+                                            {
+                                                string newStr = s.Replace(", EpicLoot-UnityLib", "").Replace("EpicLoot-UnityLib", "EpicLoot");
+                                                ca.ConstructorArguments[i] = new CustomAttributeArgument(arg.Type, newStr);
+                                                patched++;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (patched > 0)
+                    {
+                        string backupPath = dllPath + ".orig.bak";
+                        if (!File.Exists(backupPath))
+                        {
+                            File.Copy(dllPath, backupPath, false);
+                        }
+
+                        string tempPath = dllPath + ".tmp";
+                        if (File.Exists(tempPath))
+                        {
+                            File.Delete(tempPath);
+                        }
+
+                        assembly.Write(tempPath);
+                        File.Copy(tempPath, dllPath, true);
+                        File.Delete(tempPath);
+
+                        Log.LogInfo($"[Compatibility Fix] Patched {fileName}: updated {patched} EpicLoot HarmonyPatch references from 'EpicLoot-UnityLib' to standalone type name.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogError($"Failed to patch AzuCraftyBoxes.dll: {ex.Message}");
+            }
+        }
+
+        private static bool _resolverInstalled = false;
+        private static void InstallAssemblyResolver()
+        {
+            if (_resolverInstalled)
+                return;
+
+            _resolverInstalled = true;
+
+            try
+            {
+                AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
+                {
+                    try
+                    {
+                        var assemblyName = new System.Reflection.AssemblyName(args.Name).Name;
+                        if (assemblyName.Equals("EpicLoot-UnityLib", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return AppDomain.CurrentDomain.GetAssemblies()
+                                .FirstOrDefault(a => a.GetName().Name.Equals("EpicLoot", StringComparison.OrdinalIgnoreCase));
+                        }
+                    }
+                    catch
+                    {
+                    }
+                    return null;
+                };
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning($"Could not install EpicLoot assembly resolver: {ex.Message}");
             }
         }
     }

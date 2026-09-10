@@ -19,19 +19,22 @@ With the release of **Valheim 1.0.7** (Unity 6 engine update):
 This patch runs in the **BepInEx Preloader** phase before the game engine starts plugins:
 1. **In-Memory `ZRoutedRpc.Everybody` Restoration**: Converts `ZRoutedRpc.Everybody` from a compile-time `const` back into an active runtime static field in memory. **No mod DLLs need to be modified on disk!** ServerSync and all Azumatt mods run cleanly without metadata corruption.
 2. **API Compatibility Bridges**: Injects backwards-compatibility bridge methods into `assembly_valheim.dll` for breaking changes introduced in Valheim 1.0.7:
-   - `InventoryGrid.OnRightClick`: Restores `OnRightClick(UIInputHandler)` method and redirects `UpdateGui` (fixes **AzuAutoStore** Favoriting and button handling).
-   - `Inventory.AddItem`: Restores 8-parameter overload (fixes Smoothbrain's `ItemDataManager` shared library in **Cooking**, **Blacksmithing**, **ExtraSlots**, and **EpicLoot**).
-   - `ItemDrop.ItemData.GetTooltip`: Restores 5-parameter static overload (fixes **Blacksmithing** & **Cooking** crashes).
-   - `Character.Message`: Restores 4-parameter overload.
-   - `SEMan.AddStatusEffect`: Restores 4-parameter overloads (both StatusEffect and int hash).
-   - `Inventory.IsTeleportable`: Restores 0-parameter overload.
-   - `Inventory.AddItem`: Restores 4-parameter overload.
-   - `EffectList.Create`: Restores 5-parameter overload.
-   - `Terminal.ConsoleCommand`: Restores 12-parameter constructor.
-   - `InventoryGrid.Element`: Restores nested type definition referencing new `InventoryElement`.
-3. **VisEquipment.AttachArmor Call-Site Upgrading**: Automatically upgrades legacy 2-parameter `AttachArmor` calls in plugins (such as `MagicPlugin`) to the 1.0.7 3-parameter signature without colliding with `EpicLoot` Harmony patches.
-4. **Blacksmithing Transpiler Compatibility**: Automatically bypasses foreign hook scanning in `Blacksmithing.ApplyTranspilerToAll`, eliminating `InvalidOperationException: Sequence contains no matching element` in Unity 6 when playing with `AzuCraftyBoxes`.
-5. Allows your modpack to load smoothly and cleanly!
+    - `PlayerProfile.m_itemCraftStats`: Injects missing `m_itemCraftStats` dictionary and auto-initializes it in constructor (fixes **Blacksmithing** character select & save/load crash).
+    - `Inventory.Load`: Renames redundant 2-parameter overload to eliminate `AmbiguousMatchException` in Harmony patches (fixes **AzuAutoStore** `InventorySelectSameItemAfterLoad`).
+    - `InventoryGrid.OnRightClick`: Restores `OnRightClick(UIInputHandler)` method and redirects `UpdateGui` (fixes **AzuAutoStore** Favoriting and button handling).
+    - `Inventory.AddItem`: Restores 8-parameter overload (fixes Smoothbrain's `ItemDataManager` shared library in **Cooking**, **Blacksmithing**, **ExtraSlots**, and **EpicLoot**).
+    - `ItemDrop.ItemData.GetTooltip`: Restores 5-parameter static overload (fixes **Blacksmithing** & **Cooking** crashes).
+    - `Character.Message`: Restores 4-parameter overload.
+    - `SEMan.AddStatusEffect`: Restores 4-parameter overloads (both StatusEffect and int hash).
+    - `Inventory.IsTeleportable`: Restores 0-parameter overload.
+    - `Inventory.AddItem`: Restores 4-parameter overload.
+    - `EffectList.Create`: Restores 5-parameter overload.
+    - `Terminal.ConsoleCommand`: Restores 12-parameter constructor.
+    - `InventoryGrid.Element`: Restores nested type definition referencing new `InventoryElement`.
+3. **AzuCraftyBoxes EpicLoot Compatibility**: Automatically updates `EpicLootEnchantingUI` patches in `AzuCraftyBoxes.dll` to reference the merged `EpicLoot` assembly, resolving `TypeLoadException: Could not load type 'EpicLoot_UnityLib.InventoryManagement' from assembly 'EpicLoot-UnityLib'`.
+4. **VisEquipment.AttachArmor Call-Site Upgrading**: Automatically upgrades legacy 2-parameter `AttachArmor` calls in plugins (such as `MagicPlugin`) to the 1.0.7 3-parameter signature without colliding with `EpicLoot` Harmony patches.
+5. **Blacksmithing Transpiler Compatibility**: Automatically bypasses foreign hook scanning in `Blacksmithing.ApplyTranspilerToAll`, eliminating `InvalidOperationException: Sequence contains no matching element` in Unity 6 when playing with `AzuCraftyBoxes`.
+6. Allows your modpack to load smoothly and cleanly!
 
 
 ---
