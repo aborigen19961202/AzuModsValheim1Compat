@@ -39,6 +39,7 @@ namespace AzuModsValheim1Compat
 
             try
             {
+                ExecutePluginPatch();
                 Log.LogInfo("Applying Valheim 1.0.7 API bridge methods to assembly_valheim...");
                 InjectBridges(assembly);
                 Log.LogInfo("Valheim 1.0.7 API bridges injected successfully!");
@@ -193,6 +194,34 @@ namespace AzuModsValheim1Compat
                         bridge.Parameters.Add(new ParameterDefinition(targetAdd4.Parameters[i].Name, ParameterAttributes.None, targetAdd4.Parameters[i].ParameterType));
 
                     var il = bridge.Body.GetILProcessor();
+
+                    // MUC / AzuAutoStore / ItemDataManager has a transpiler RemoveLogging that searches for ZLog.Log:
+                    // instructions.MatchForward(false, new CodeMatch(i => i.Calls(AccessTools.Method(typeof(ZLog), "Log"))))
+                    // .SetInstruction(new CodeInstruction(OpCodes.Pop))
+                    // If ZLog.Log is not present, SetInstruction throws ArgumentOutOfRangeException.
+                    // By placing a dummy call to ZLog.Log here:
+                    // - If RemoveLogging runs, it replaces the call with OpCodes.Pop (popping the dummy string), succeeding cleanly!
+                    // - If RemoveLogging does not run, it performs a harmless log call.
+                    var zlogLogRef = mainModule.GetMemberReferences().FirstOrDefault(m => m.DeclaringType.Name == "ZLog" && m.Name == "Log" && m is MethodReference) as MethodReference;
+                    if (zlogLogRef == null)
+                    {
+                        var zlogType = mainModule.GetTypeReferences().FirstOrDefault(t => t.Name == "ZLog");
+                        if (zlogType != null)
+                        {
+                            zlogLogRef = new MethodReference("Log", mainModule.TypeSystem.Void, zlogType)
+                            {
+                                HasThis = false,
+                                Parameters = { new ParameterDefinition(mainModule.TypeSystem.Object) }
+                            };
+                        }
+                    }
+
+                    if (zlogLogRef != null)
+                    {
+                        il.Emit(OpCodes.Ldstr, "AddItem bridge");
+                        il.Emit(OpCodes.Call, zlogLogRef);
+                    }
+
                     il.Emit(OpCodes.Ldarg_0);
                     il.Emit(OpCodes.Ldarg_1);
                     il.Emit(OpCodes.Ldarg_2);
@@ -203,7 +232,7 @@ namespace AzuModsValheim1Compat
                     il.Emit(OpCodes.Ret);
 
                     inventory.Methods.Add(bridge);
-                    Log.LogInfo(" - Injected Inventory.AddItem(ItemData, int, int, int)");
+                    Log.LogInfo(" - Injected Inventory.AddItem(ItemData, int, int, int) [with ZLog placeholder for AzuAutoStore / MUC RemoveLogging]");
                 }
 
                 // 3c. Inventory.AddItem(string, int, int, int, long, string, Vector2i, bool) -> calls 10-param overload
@@ -471,13 +500,14 @@ namespace AzuModsValheim1Compat
                     if (File.Exists(backupPath))
                     {
                         string fileName = Path.GetFileName(dllPath);
-                        if (fileName.Equals("MistBeGone.dll", StringComparison.OrdinalIgnoreCase))
+                        if (fileName.Equals("MistBeGone.dll", StringComparison.OrdinalIgnoreCase) ||
+                            fileName.Equals("AzuAutoStore.dll", StringComparison.OrdinalIgnoreCase))
                         {
                             try
                             {
                                 File.Copy(backupPath, dllPath, true);
                                 File.Delete(backupPath);
-                                Log.LogInfo($"Restored original {fileName} from backup (memory patch handles ZRoutedRpc.Everybody).");
+                                Log.LogInfo($"Restored original {fileName} from backup (memory patch handles Inventory.AddItem & ZRoutedRpc.Everybody).");
                             }
                             catch (Exception ex)
                             {
@@ -508,7 +538,6 @@ namespace AzuModsValheim1Compat
                         PatchAttachArmorCalls(dllPath);
                         PatchBlacksmithing(dllPath);
                         PatchAzuCraftyBoxes(dllPath);
-                        PatchAzuAutoStore(dllPath);
                     }
                     catch (Exception ex)
                     {
@@ -732,67 +761,6 @@ namespace AzuModsValheim1Compat
             }
         }
 
-        private static void PatchAzuAutoStore(string dllPath)
-        {
-            string fileName = Path.GetFileName(dllPath);
-            if (!fileName.Equals("AzuAutoStore.dll", StringComparison.OrdinalIgnoreCase))
-                return;
-
-            try
-            {
-                byte[] dllBytes = File.ReadAllBytes(dllPath);
-                string asText = System.Text.Encoding.ASCII.GetString(dllBytes);
-                if (!asText.Contains("RemoveLogging"))
-                    return;
-
-                using (var stream = new MemoryStream(dllBytes))
-                using (var assembly = AssemblyDefinition.ReadAssembly(stream, GetReaderParameters()))
-                {
-                    var targetType = assembly.MainModule.GetType("AzuAutoStore.APIs.MUC.MUCSrc.Patches.InventoryPatch");
-                    var removeLogging = targetType?.Methods.FirstOrDefault(m => m.Name == "RemoveLogging");
-                    if (removeLogging == null || !removeLogging.HasBody)
-                        return;
-
-                    // If already neutralized (ldarg.0; ret;) skip
-                    if (removeLogging.Body.Instructions.Count == 2 &&
-                        removeLogging.Body.Instructions[0].OpCode == OpCodes.Ldarg_0 &&
-                        removeLogging.Body.Instructions[1].OpCode == OpCodes.Ret)
-                    {
-                        return;
-                    }
-
-                    removeLogging.Body.Instructions.Clear();
-                    removeLogging.Body.Variables.Clear();
-                    removeLogging.Body.ExceptionHandlers.Clear();
-
-                    var il = removeLogging.Body.GetILProcessor();
-                    il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Ret);
-
-                    string backupPath = dllPath + ".orig.bak";
-                    if (!File.Exists(backupPath))
-                    {
-                        File.Copy(dllPath, backupPath, false);
-                    }
-
-                    string tempPath = dllPath + ".tmp";
-                    if (File.Exists(tempPath))
-                    {
-                        File.Delete(tempPath);
-                    }
-
-                    assembly.Write(tempPath);
-                    File.Copy(tempPath, dllPath, true);
-                    File.Delete(tempPath);
-
-                    Log.LogInfo($"[Compatibility Fix] Patched {fileName}: neutralized RemoveLogging transpiler on Inventory.AddItem [Fixes ArgumentOutOfRangeException & ItemDataManager character save crash].");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.LogError($"Failed to patch AzuAutoStore.dll: {ex.Message}");
-            }
-        }
 
         private static ReaderParameters GetReaderParameters()
         {
