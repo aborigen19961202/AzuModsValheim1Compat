@@ -1,6 +1,6 @@
 {
   "name": "AzuModsValheim1Compat",
-  "version_number": "1.0.2",
+  "version_number": "1.0.3",
   "website_url": "https://github.com/aborigen19961202/AzuModsValheim1Compat",
   "description": "Preloader compatibility patch for Valheim 1.0.7 / Unity 6. Fixes ZRoutedRpc.Everybody MissingFieldException in AzuCraftyBoxes, AzuAutoStore, and other Azumatt mods.",
   "dependencies": [

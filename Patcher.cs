@@ -183,8 +183,8 @@ namespace AzuModsValheim1Compat
 
                 // 3b. Inventory.AddItem(ItemData, int, int, int) -> calls AddItem(item, amount, x, y, false)
                 var targetAdd4 = inventory.Methods.FirstOrDefault(m => m.Name == "AddItem" && m.Parameters.Count == 5 && m.Parameters[0].ParameterType.Name == "ItemData");
-                var existingAdd3 = inventory.Methods.FirstOrDefault(m => m.Name == "AddItem" && m.Parameters.Count == 4 && m.Parameters[0].ParameterType.Name == "ItemData");
-                if (targetAdd4 != null && existingAdd3 == null)
+                var existingAdd4 = inventory.Methods.FirstOrDefault(m => m.Name == "AddItem" && m.Parameters.Count == 4 && m.Parameters[0].ParameterType.Name == "ItemData");
+                if (targetAdd4 != null && existingAdd4 == null)
                 {
                     var bridge = new MethodDefinition("AddItem", MethodAttributes.Public | MethodAttributes.HideBySig, targetAdd4.ReturnType);
                     for (int i = 0; i < 4; i++)
@@ -202,6 +202,31 @@ namespace AzuModsValheim1Compat
 
                     inventory.Methods.Add(bridge);
                     Log.LogInfo(" - Injected Inventory.AddItem(ItemData, int, int, int)");
+                }
+
+                // 3c. Inventory.AddItem(string, int, int, int, long, string, Vector2i, bool) -> calls 10-param overload
+                // Fixes Smoothbrain's ItemDataManager shared library (Cooking, Blacksmithing, ExtraSlots, EpicLoot)
+                var targetAdd10 = inventory.Methods.FirstOrDefault(m => m.Name == "AddItem" && m.Parameters.Count == 10 && m.Parameters[0].ParameterType.Name == "String");
+                var existingAdd8 = inventory.Methods.FirstOrDefault(m => m.Name == "AddItem" && m.Parameters.Count == 8 && m.Parameters[0].ParameterType.Name == "String" && m.Parameters[6].ParameterType.Name == "Vector2i");
+                if (targetAdd10 != null && existingAdd8 == null)
+                {
+                    var bridge = new MethodDefinition("AddItem", MethodAttributes.Public | MethodAttributes.HideBySig, targetAdd10.ReturnType);
+                    for (int i = 0; i < 7; i++)
+                        bridge.Parameters.Add(new ParameterDefinition(targetAdd10.Parameters[i].Name, ParameterAttributes.None, targetAdd10.Parameters[i].ParameterType));
+                    bridge.Parameters.Add(new ParameterDefinition("worldGen", ParameterAttributes.None, mainModule.TypeSystem.Boolean));
+
+                    var il = bridge.Body.GetILProcessor();
+                    il.Emit(OpCodes.Ldarg_0); // this
+                    for (int i = 0; i < 7; i++)
+                        il.Emit(OpCodes.Ldarg, bridge.Parameters[i]);
+                    il.Emit(OpCodes.Ldarg, bridge.Parameters[7]); // cheated = worldGen
+                    il.Emit(OpCodes.Ldc_I4_0); // pickedUp = false
+                    il.Emit(OpCodes.Ldc_I4_0); // dropIfFullInv = false
+                    il.Emit(OpCodes.Callvirt, targetAdd10);
+                    il.Emit(OpCodes.Ret);
+
+                    inventory.Methods.Add(bridge);
+                    Log.LogInfo(" - Injected Inventory.AddItem(8 params) [Fixes ItemDataManager / Cooking / EpicLoot / ExtraSlots]");
                 }
             }
 
@@ -323,6 +348,41 @@ namespace AzuModsValheim1Compat
 
                     inventoryGrid.NestedTypes.Add(nestedElement);
                     Log.LogInfo(" - Injected InventoryGrid.Element subclassing InventoryElement");
+                }
+
+                // 8. InventoryGrid.OnRightClick(UIInputHandler element) -> calls OnRightDown
+                // In Valheim 1.0.7, OnRightClick was renamed to OnRightDown.
+                // Fixes AzuAutoStore's InventoryGridButtonHandlingPatches
+                var uiInputHandlerType = mainModule.GetType("UIInputHandler");
+                var existingRight = inventoryGrid.Methods.FirstOrDefault(m => m.Name == "OnRightClick" && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "UIInputHandler");
+                var targetDown = inventoryGrid.Methods.FirstOrDefault(m => m.Name == "OnRightDown" && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "UIInputHandler");
+                if (existingRight == null && targetDown != null && uiInputHandlerType != null)
+                {
+                    var bridge = new MethodDefinition("OnRightClick", MethodAttributes.Public | MethodAttributes.HideBySig, mainModule.TypeSystem.Void);
+                    bridge.Parameters.Add(new ParameterDefinition("element", ParameterAttributes.None, uiInputHandlerType));
+
+                    var il = bridge.Body.GetILProcessor();
+                    il.Emit(OpCodes.Ldarg_0); // this
+                    il.Emit(OpCodes.Ldarg_1); // element
+                    il.Emit(OpCodes.Call, targetDown);
+                    il.Emit(OpCodes.Ret);
+
+                    inventoryGrid.Methods.Add(bridge);
+
+                    // Redirect UpdateGui's ldftn OnRightDown to OnRightClick so Harmony patches intercept the right-click
+                    var updateGui = inventoryGrid.Methods.FirstOrDefault(m => m.Name == "UpdateGui");
+                    if (updateGui != null && updateGui.HasBody)
+                    {
+                        foreach (var inst in updateGui.Body.Instructions)
+                        {
+                            if (inst.OpCode == OpCodes.Ldftn && inst.Operand is MethodReference mr && mr.Name == "OnRightDown")
+                            {
+                                inst.Operand = bridge;
+                            }
+                        }
+                    }
+
+                    Log.LogInfo(" - Injected InventoryGrid.OnRightClick(UIInputHandler) [Fixes AzuAutoStore Favoriting]");
                 }
             }
         }
