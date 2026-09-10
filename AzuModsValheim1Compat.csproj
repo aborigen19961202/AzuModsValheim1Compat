@@ -8,7 +8,7 @@
     <Nullable>disable</Nullable>
     <Version>1.0.7</Version>
     <Authors>Aborigen</Authors>
-    <Description>BepInEx Preloader compatibility patch for Azumatt mods on Valheim 1.0.7</Description>
+    <Description>BepInEx Preloader compatibility patch for Azumatt, Smoothbrain and legacy mods on Valheim 1.0.7</Description>
   </PropertyGroup>
 
   <ItemGroup>
