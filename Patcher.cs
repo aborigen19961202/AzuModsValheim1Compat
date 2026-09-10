@@ -62,6 +62,17 @@ namespace AzuModsValheim1Compat
                 string pluginsPath = Paths.PluginPath;
                 if (string.IsNullOrEmpty(pluginsPath) || !Directory.Exists(pluginsPath))
                 {
+                    try
+                    {
+                        pluginsPath = Path.Combine(Paths.BepInExRootPath, "plugins");
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (string.IsNullOrEmpty(pluginsPath) || !Directory.Exists(pluginsPath))
+                {
                     Log.LogWarning($"Plugins directory not found at: {pluginsPath}");
                     return;
                 }
