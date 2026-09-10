@@ -6,7 +6,7 @@
     <RootNamespace>AzuModsValheim1Compat</RootNamespace>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <Version>1.0.5</Version>
+    <Version>1.0.6</Version>
     <Authors>Aborigen</Authors>
     <Description>BepInEx Preloader compatibility patch for Azumatt mods on Valheim 1.0.7</Description>
   </PropertyGroup>

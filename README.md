@@ -34,7 +34,8 @@ This patch runs in the **BepInEx Preloader** phase before the game engine starts
 3. **AzuCraftyBoxes EpicLoot Compatibility**: Automatically updates `EpicLootEnchantingUI` patches in `AzuCraftyBoxes.dll` to reference the merged `EpicLoot` assembly, resolving `TypeLoadException: Could not load type 'EpicLoot_UnityLib.InventoryManagement' from assembly 'EpicLoot-UnityLib'`.
 4. **VisEquipment.AttachArmor Call-Site Upgrading**: Automatically upgrades legacy 2-parameter `AttachArmor` calls in plugins (such as `MagicPlugin`) to the 1.0.7 3-parameter signature without colliding with `EpicLoot` Harmony patches.
 5. **Blacksmithing Transpiler Compatibility**: Automatically bypasses foreign hook scanning in `Blacksmithing.ApplyTranspilerToAll`, eliminating `InvalidOperationException: Sequence contains no matching element` in Unity 6 when playing with `AzuCraftyBoxes`.
-6. Allows your modpack to load smoothly and cleanly!
+6. **AzuAutoStore RemoveLogging Transpiler Neutralization**: Neutralizes the outdated `RemoveLogging` transpiler on `Inventory.AddItem`, preventing `ArgumentOutOfRangeException` and unblocking `ItemDataManager` (**Cooking**, **Blacksmithing**, **ExtraSlots**) so character creation and saving (`Inventory.Save`) completes without error.
+7. Allows your modpack to load smoothly and cleanly!
 
 
 ---

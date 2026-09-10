@@ -471,8 +471,7 @@ namespace AzuModsValheim1Compat
                     if (File.Exists(backupPath))
                     {
                         string fileName = Path.GetFileName(dllPath);
-                        if (fileName.Equals("AzuAutoStore.dll", StringComparison.OrdinalIgnoreCase) ||
-                            fileName.Equals("MistBeGone.dll", StringComparison.OrdinalIgnoreCase))
+                        if (fileName.Equals("MistBeGone.dll", StringComparison.OrdinalIgnoreCase))
                         {
                             try
                             {
@@ -492,6 +491,7 @@ namespace AzuModsValheim1Compat
                 // - VisEquipment.AttachArmor 2->3 param upgrading (MagicPlugin)
                 // - Blacksmithing transpiler scan bypass (Blacksmithing)
                 // - EpicLoot-UnityLib HarmonyPatch redirection (AzuCraftyBoxes)
+                // - RemoveLogging transpiler neutralization on Inventory.AddItem (AzuAutoStore)
                 foreach (string dllPath in allPluginDlls)
                 {
                     string fileName = Path.GetFileName(dllPath);
@@ -508,6 +508,7 @@ namespace AzuModsValheim1Compat
                         PatchAttachArmorCalls(dllPath);
                         PatchBlacksmithing(dllPath);
                         PatchAzuCraftyBoxes(dllPath);
+                        PatchAzuAutoStore(dllPath);
                     }
                     catch (Exception ex)
                     {
@@ -532,7 +533,7 @@ namespace AzuModsValheim1Compat
                 return;
 
             using (var stream = new MemoryStream(dllBytes))
-            using (var assembly = AssemblyDefinition.ReadAssembly(stream))
+            using (var assembly = AssemblyDefinition.ReadAssembly(stream, GetReaderParameters()))
             {
                 int patchedCalls = 0;
 
@@ -607,7 +608,7 @@ namespace AzuModsValheim1Compat
             {
                 byte[] dllBytes = File.ReadAllBytes(dllPath);
                 using (var stream = new MemoryStream(dllBytes))
-                using (var assembly = AssemblyDefinition.ReadAssembly(stream))
+                using (var assembly = AssemblyDefinition.ReadAssembly(stream, GetReaderParameters()))
                 {
                     var mainType = assembly.MainModule.GetType("Blacksmithing.Blacksmithing");
                     var applyMethod = mainType?.Methods.FirstOrDefault(m => m.Name == "ApplyTranspilerToAll");
@@ -674,7 +675,7 @@ namespace AzuModsValheim1Compat
                     return;
 
                 using (var stream = new MemoryStream(dllBytes))
-                using (var assembly = AssemblyDefinition.ReadAssembly(stream))
+                using (var assembly = AssemblyDefinition.ReadAssembly(stream, GetReaderParameters()))
                 {
                     int patched = 0;
                     foreach (var type in assembly.MainModule.Types)
@@ -729,6 +730,102 @@ namespace AzuModsValheim1Compat
             {
                 Log.LogError($"Failed to patch AzuCraftyBoxes.dll: {ex.Message}");
             }
+        }
+
+        private static void PatchAzuAutoStore(string dllPath)
+        {
+            string fileName = Path.GetFileName(dllPath);
+            if (!fileName.Equals("AzuAutoStore.dll", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            try
+            {
+                byte[] dllBytes = File.ReadAllBytes(dllPath);
+                string asText = System.Text.Encoding.ASCII.GetString(dllBytes);
+                if (!asText.Contains("RemoveLogging"))
+                    return;
+
+                using (var stream = new MemoryStream(dllBytes))
+                using (var assembly = AssemblyDefinition.ReadAssembly(stream, GetReaderParameters()))
+                {
+                    var targetType = assembly.MainModule.GetType("AzuAutoStore.APIs.MUC.MUCSrc.Patches.InventoryPatch");
+                    var removeLogging = targetType?.Methods.FirstOrDefault(m => m.Name == "RemoveLogging");
+                    if (removeLogging == null || !removeLogging.HasBody)
+                        return;
+
+                    // If already neutralized (ldarg.0; ret;) skip
+                    if (removeLogging.Body.Instructions.Count == 2 &&
+                        removeLogging.Body.Instructions[0].OpCode == OpCodes.Ldarg_0 &&
+                        removeLogging.Body.Instructions[1].OpCode == OpCodes.Ret)
+                    {
+                        return;
+                    }
+
+                    removeLogging.Body.Instructions.Clear();
+                    removeLogging.Body.Variables.Clear();
+                    removeLogging.Body.ExceptionHandlers.Clear();
+
+                    var il = removeLogging.Body.GetILProcessor();
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Ret);
+
+                    string backupPath = dllPath + ".orig.bak";
+                    if (!File.Exists(backupPath))
+                    {
+                        File.Copy(dllPath, backupPath, false);
+                    }
+
+                    string tempPath = dllPath + ".tmp";
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+
+                    assembly.Write(tempPath);
+                    File.Copy(tempPath, dllPath, true);
+                    File.Delete(tempPath);
+
+                    Log.LogInfo($"[Compatibility Fix] Patched {fileName}: neutralized RemoveLogging transpiler on Inventory.AddItem [Fixes ArgumentOutOfRangeException & ItemDataManager character save crash].");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogError($"Failed to patch AzuAutoStore.dll: {ex.Message}");
+            }
+        }
+
+        private static ReaderParameters GetReaderParameters()
+        {
+            var resolver = new DefaultAssemblyResolver();
+            try
+            {
+                if (Paths.DllSearchPaths != null)
+                {
+                    foreach (var path in Paths.DllSearchPaths)
+                    {
+                        if (!string.IsNullOrEmpty(path) && Directory.Exists(path))
+                            resolver.AddSearchDirectory(path);
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (!string.IsNullOrEmpty(Paths.BepInExAssemblyDirectory) && Directory.Exists(Paths.BepInExAssemblyDirectory))
+                    resolver.AddSearchDirectory(Paths.BepInExAssemblyDirectory);
+                if (!string.IsNullOrEmpty(Paths.ManagedPath) && Directory.Exists(Paths.ManagedPath))
+                    resolver.AddSearchDirectory(Paths.ManagedPath);
+                if (!string.IsNullOrEmpty(Paths.PluginPath) && Directory.Exists(Paths.PluginPath))
+                    resolver.AddSearchDirectory(Paths.PluginPath);
+            }
+            catch
+            {
+            }
+
+            return new ReaderParameters { AssemblyResolver = resolver };
         }
 
         private static bool _resolverInstalled = false;
