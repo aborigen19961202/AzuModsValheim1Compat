@@ -353,11 +353,11 @@ namespace AzuModsValheim1Compat
                 // 8. InventoryGrid.OnRightClick(UIInputHandler element) -> calls OnRightDown
                 // In Valheim 1.0.7, OnRightClick was renamed to OnRightDown.
                 // Fixes AzuAutoStore's InventoryGridButtonHandlingPatches
-                var uiInputHandlerType = mainModule.GetType("UIInputHandler");
                 var existingRight = inventoryGrid.Methods.FirstOrDefault(m => m.Name == "OnRightClick" && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "UIInputHandler");
                 var targetDown = inventoryGrid.Methods.FirstOrDefault(m => m.Name == "OnRightDown" && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.Name == "UIInputHandler");
-                if (existingRight == null && targetDown != null && uiInputHandlerType != null)
+                if (existingRight == null && targetDown != null)
                 {
+                    var uiInputHandlerType = targetDown.Parameters[0].ParameterType;
                     var bridge = new MethodDefinition("OnRightClick", MethodAttributes.Public | MethodAttributes.HideBySig, mainModule.TypeSystem.Void);
                     bridge.Parameters.Add(new ParameterDefinition("element", ParameterAttributes.None, uiInputHandlerType));
 
@@ -386,6 +386,7 @@ namespace AzuModsValheim1Compat
                 }
             }
         }
+
 
         public static void ExecutePluginPatch()
         {
@@ -458,11 +459,13 @@ namespace AzuModsValheim1Compat
                     try
                     {
                         PatchAttachArmorCalls(dllPath);
+                        PatchBlacksmithing(dllPath);
                     }
                     catch (Exception ex)
                     {
-                        Log.LogError($"Error checking AttachArmor calls in {fileName}: {ex.Message}");
+                        Log.LogError($"Error checking plugin compatibility in {fileName}: {ex.Message}");
                     }
+
                 }
             }
             catch (Exception ex)
@@ -546,5 +549,69 @@ namespace AzuModsValheim1Compat
                 }
             }
         }
+
+        private static void PatchBlacksmithing(string dllPath)
+        {
+            string fileName = Path.GetFileName(dllPath);
+            if (!fileName.Equals("Blacksmithing.dll", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            try
+            {
+                byte[] dllBytes = File.ReadAllBytes(dllPath);
+                using (var stream = new MemoryStream(dllBytes))
+                using (var assembly = AssemblyDefinition.ReadAssembly(stream))
+                {
+                    var mainType = assembly.MainModule.GetType("Blacksmithing.Blacksmithing");
+                    var applyMethod = mainType?.Methods.FirstOrDefault(m => m.Name == "ApplyTranspilerToAll");
+                    if (applyMethod == null || !applyMethod.HasBody)
+                        return;
+
+                    Instruction targetInst = null;
+                    for (int i = 0; i < applyMethod.Body.Instructions.Count; i++)
+                    {
+                        var inst = applyMethod.Body.Instructions[i];
+                        if (inst.OpCode == OpCodes.Ldarg_1 && inst.Next != null && inst.Next.OpCode == OpCodes.Newobj &&
+                            inst.Next.Operand is MethodReference mr && mr.DeclaringType.Name == "HarmonyMethod")
+                        {
+                            targetInst = inst;
+                            break;
+                        }
+                    }
+
+                    if (targetInst == null)
+                        return;
+
+                    var inst3 = applyMethod.Body.Instructions[3];
+                    if (inst3.OpCode == OpCodes.Br && inst3.Operand == targetInst)
+                        return;
+
+                    applyMethod.Body.Instructions[3] = Instruction.Create(OpCodes.Br, targetInst);
+
+                    string backupPath = dllPath + ".orig.bak";
+                    if (!File.Exists(backupPath))
+                    {
+                        File.Copy(dllPath, backupPath, false);
+                    }
+
+                    string tempPath = dllPath + ".tmp";
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+
+                    assembly.Write(tempPath);
+                    File.Copy(tempPath, dllPath, true);
+                    File.Delete(tempPath);
+
+                    Log.LogInfo($"[Compatibility Fix] Patched {fileName}: bypassed foreign hook scan in ApplyTranspilerToAll [Fixes InvalidOperationException / Unity 6 crash].");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogError($"Failed to patch Blacksmithing.dll: {ex.Message}");
+            }
+        }
     }
 }
+

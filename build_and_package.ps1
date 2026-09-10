@@ -7,8 +7,9 @@ Set-Location $scriptDir
 Write-Host "===> Building AzuModsValheim1Compat in Release mode..." -ForegroundColor Cyan
 dotnet build -c Release
 
-$version = "1.0.3"
+$version = (Get-Content (Join-Path $scriptDir "manifest.json") | ConvertFrom-Json).version_number
 $distDir = Join-Path $scriptDir "package"
+
 $patcherTargetDir = Join-Path $distDir "patchers\AzuModsValheim1Compat"
 
 if (Test-Path $distDir) {
