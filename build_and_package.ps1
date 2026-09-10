@@ -44,10 +44,17 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
 Write-Host "===> Thunderstore package ready at: $zipPath" -ForegroundColor Green
 
 # Deploy to local r2modman profile if present
-$r2profile = "C:\Users\aborigen\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\sborka\BepInEx\patchers\AzuModsValheim1Compat"
-if (Test-Path (Split-Path -Parent $r2profile)) {
+$r2profile1 = "C:\Users\aborigen\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\sborka\BepInEx\patchers\AzuModsValheim1Compat"
+$r2profile2 = "C:\Users\aborigen\AppData\Roaming\r2modmanPlus-local\Valheim\profiles\sborka\BepInEx\patchers\KRINJUN-AzuModsValheim1Compat\AzuModsValheim1Compat"
+
+if (Test-Path (Split-Path -Parent $r2profile2)) {
+    Write-Host "===> Deploying to r2modman installed package: $r2profile2..." -ForegroundColor Yellow
+    New-Item -ItemType Directory -Force -Path $r2profile2 | Out-Null
+    Copy-Item (Join-Path $scriptDir "bin\Release\netstandard2.0\AzuModsValheim1Compat.dll") -Destination $r2profile2 -Force
+    Write-Host "===> Successfully deployed to: $r2profile2" -ForegroundColor Green
+} elseif (Test-Path (Split-Path -Parent $r2profile1)) {
     Write-Host "===> Deploying to r2modman profile 'sborka'..." -ForegroundColor Yellow
-    New-Item -ItemType Directory -Force -Path $r2profile | Out-Null
-    Copy-Item (Join-Path $scriptDir "bin\Release\netstandard2.0\AzuModsValheim1Compat.dll") -Destination $r2profile -Force
-    Write-Host "===> Successfully deployed to: $r2profile" -ForegroundColor Green
+    New-Item -ItemType Directory -Force -Path $r2profile1 | Out-Null
+    Copy-Item (Join-Path $scriptDir "bin\Release\netstandard2.0\AzuModsValheim1Compat.dll") -Destination $r2profile1 -Force
+    Write-Host "===> Successfully deployed to: $r2profile1" -ForegroundColor Green
 }
